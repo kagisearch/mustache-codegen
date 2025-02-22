@@ -35,16 +35,6 @@ func TestCompileGo(t *testing.T) {
 		"Interpolation/HTML Escaping":                      "These characters should be HTML escaped: &amp; &#34; &lt; &gt;\n",
 		"Interpolation/Implicit Iterators - HTML Escaping": "These characters should be HTML escaped: &amp; &#34; &lt; &gt;\n",
 		"Sections/Implicit Iterator - HTML Escaping":       "\"(&amp;)(&#34;)(&lt;)(&gt;)\"",
-
-		// TODO(someday): We're not spec compliant for these whitespace tests,
-		// but for our use case (HTML-only output), this doesn't really matter.
-		"~Inheritance/Nested block reindentation":    "\n  one\n\nthree\n\n\n",
-		"~Inheritance/Intrinsic indentation":         "Hi,\n\none\ntwo\n\n",
-		"~Inheritance/Block reindentation":           "Hi,\n\n    one\n    two\n\n",
-		"~Inheritance/Standalone block":              "Hi,\n  \none\ntwo\n",
-		"~Inheritance/Standalone parent":             "Hi,\n  one\ntwo\n\n",
-		"~Inheritance/Override parent with newlines": "\npeaked\n\n:(\n",
-		"~Inheritance/Inherit":                       "default content\n",
 	}
 
 	for _, suiteName := range suiteNames {

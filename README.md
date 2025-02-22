@@ -3,10 +3,10 @@
 mustache-codegen is an implementation of the [Mustache templating language][]
 that emits compiled code for Go and JavaScript.
 
-mustache-codegen passes the base test suite and implements [parents][].
+mustache-codegen implements Mustache v1.4, including [inheritance][].
 
 [Mustache templating language]: https://mustache.github.io/
-[parents]: https://mustache.github.io/mustache.5.html#Parents
+[inheritance]: https://mustache.github.io/mustache.5.html#Parents
 
 ## License
 

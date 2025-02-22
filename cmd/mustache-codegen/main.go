@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -30,6 +31,10 @@ const (
 	partial
 	block
 	parent
+
+	// indentPoint is a directive used to indicate where block indents should be inserted
+	// (i.e. at the beginning of logical lines).
+	indentPoint
 )
 
 func main() {
@@ -77,34 +82,35 @@ func main() {
 	os.Stdout.Write(output)
 }
 
-type partialKey struct {
-	name   string
-	indent string
-}
+const (
+	defaultStartDelim = "{{"
+	defaultEndDelim   = "}}"
+)
 
 func parse(s string) ([]tag, error) {
 	type scope struct {
-		name  string
-		slice *[]tag
+		start      tag
+		lineno     int
+		slice      *[]tag
+		standalone bool
 	}
 
 	var result []tag
-	startDelim := "{{"
-	endDelim := "}}"
+	startDelim := defaultStartDelim
+	endDelim := defaultEndDelim
 
 	stack := []scope{
 		{slice: &result},
 	}
 
-	newScope := func(tt tagType, name string) {
+	lineno := 1
+	newScope := func(newTag tag) {
 		curr := stack[len(stack)-1].slice
-		*curr = append(*curr, tag{
-			tt: tt,
-			s:  name,
-		})
+		*curr = append(*curr, newTag)
 		stack = append(stack, scope{
-			name:  name,
-			slice: &(*curr)[len(*curr)-1].body,
+			start:  newTag,
+			lineno: lineno,
+			slice:  &(*curr)[len(*curr)-1].body,
 		})
 	}
 
@@ -118,157 +124,284 @@ func parse(s string) ([]tag, error) {
 		}
 	}
 
-	for base, prevStandalone := 0, -1; ; {
-		curr := stack[len(stack)-1].slice
-		search := s[base:]
-
-		tagStart := strings.Index(search, startDelim)
-		if tagStart < 0 {
-			appendLiteral(search)
-			break
-		}
-
-		tagInnerStart := tagStart + len(startDelim)
-		tagLength := strings.Index(search[tagInnerStart:], endDelim)
-		if tagLength < 0 {
-			appendLiteral(search[tagStart:])
-			break
-		}
-
-		tagInnerEnd := tagInnerStart + tagLength
-		tagInner := search[tagInnerStart:tagInnerEnd]
-		tagEnd := tagInnerEnd + len(endDelim)
-		special, name := cutTag(tagInner, startDelim == "{{" && endDelim == "}}")
-		if name == "" {
-			appendLiteral(search[:tagEnd])
-			base += tagEnd
-			continue
-		}
-
-		// Literals and whitespace handling.
-		var indent string
-		switch special {
-		case '!', '#', '^', '/', '<', '>', '$':
-			if prevLineEnd, nextLineStart, insertNL, lineIndent, ok := isStandalone(s, base+tagStart, base+tagEnd); ok {
-				indent = lineIndent
-				if base < prevLineEnd {
-					appendLiteral(s[base:prevLineEnd])
-				}
-				if prevLineEnd > prevStandalone {
-					appendLiteral(insertNL)
-				}
-				base = nextLineStart
-				prevStandalone = nextLineStart
-			} else {
-				appendLiteral(search[:tagStart])
-				base += tagEnd
+	dedent := func(s string) string {
+		for _, curr := range stack {
+			if curr.start.tt != block {
+				continue
 			}
-		default:
-			appendLiteral(search[:tagStart])
-			base += tagEnd
+			var hasIndent bool
+			s, hasIndent = strings.CutPrefix(s, curr.start.indent)
+			if !hasIndent {
+				break
+			}
 		}
-
-		switch special {
-		case '#':
-			newScope(section, name)
-		case '^':
-			newScope(invertedSection, name)
-		case '!':
-			// Comment
-		case '>':
-			*curr = append(*curr, tag{
-				tt:     partial,
-				s:      name,
-				indent: indent,
-			})
-		case '$':
-			newScope(block, name)
-		case '<':
-			newScope(parent, name)
-		case '/':
-			// End
-			if len(stack) == 1 {
-				return nil, fmt.Errorf("%s/%s%s without opening", startDelim, name, endDelim)
-			}
-			if want := stack[len(stack)-1].name; name != want {
-				return nil, fmt.Errorf("mismatched %s%s%s (last opened %s)", startDelim, name, endDelim, want)
-			}
-			stack = stack[:len(stack)-1]
-		case '&':
-			*curr = append(*curr, tag{
-				tt: rawVariable,
-				s:  name,
-			})
-		case '{':
-			if strings.HasPrefix(s[base:], "}") {
-				*curr = append(*curr, tag{
-					tt: rawVariable,
-					s:  name,
-				})
-				base++
-			} else {
-				*curr = append(*curr, tag{
-					tt: variable,
-					s:  name,
-				})
-			}
-		default:
-			*curr = append(*curr, tag{
-				tt: variable,
-				s:  name,
-			})
-		}
+		return s
 	}
 
-	if len(stack) > 1 {
-		return nil, fmt.Errorf("unclosed %s", stack[len(stack)-1].name)
+	// Process (roughly) one line at a time.
+	for len(s) > 0 {
+		s = dedent(s)
+		eol := indexNextLine(s)
+
+		tagStart := strings.Index(s[:eol], startDelim)
+		if tagStart < 0 {
+			// Add indent point if there are no tags.
+			curr := stack[len(stack)-1].slice
+			*curr = append(*curr, tag{tt: indentPoint})
+		}
+
+		// Line has one or more tags.
+		// Hold off on adding literals until we know whether the line is standalone.
+		prevEnd := 0
+		for tagStart >= 0 {
+			special, key, tagEnd, err := cutTag(s, tagStart, startDelim, endDelim)
+			if err != nil {
+				return nil, fmt.Errorf("%d: %v", lineno, err)
+			}
+			if n := strings.Count(s[tagStart:tagEnd], "\n"); n > 0 {
+				// Tag spanned multiple lines (comment).
+				// Update line position variables.
+				lineno += n
+				eol = tagEnd + indexNextLine(s[tagEnd:])
+			}
+			if special != '!' {
+				// Non-comments must contain a non-whitespace character sequence.
+				if key == "" {
+					return nil, fmt.Errorf("%d: empty tag", lineno)
+				}
+				if i := strings.IndexFunc(key, unicode.IsSpace); i >= 0 {
+					return nil, fmt.Errorf("%d: extra words in %s tag", lineno, key[:i])
+				}
+			}
+
+			// "Standalone" tags are those that have nothing except whitespace
+			// before or after them on a line.
+			// Such tags are treated as though the leading whitespace the rest of the line were not present.
+			// "Standalone pair" tags are those where the whitespace after their closing tag
+			// is considered instead of the whitespace after the tag itself.
+			leadingText := s[prevEnd:tagStart]
+			trailingText := s[tagEnd:eol]
+			isParameter := special == '$' && stack[len(stack)-1].start.tt != parent
+			isArgument := special == '$' && stack[len(stack)-1].start.tt == parent
+			isStandalonePairTag := special == '<' || isParameter
+			if isStandalonePairTag {
+				i, err := elementEnd(key, s, tagEnd, startDelim, endDelim)
+				if err != nil {
+					return nil, fmt.Errorf("%d: %v", lineno, err)
+				}
+				trailingText = s[i : i+indexNextLine(s[i:])]
+			}
+			isStandalone := prevEnd == 0 &&
+				special != 0 && special != '&' &&
+				isSpace(leadingText) && isSpace(trailingText)
+			ignoreRestOfLine := isStandalone && !isStandalonePairTag
+
+			// Compute indentation.
+			var indent string
+			switch {
+			// Argument tags and standalone parameter tags that clear at the end
+			// use the following line's indentation.
+			case (isArgument || isParameter && isStandalone) && isSpace(s[tagEnd:eol]):
+				indent = lineIndentation(dedent(s[eol:]))
+				// Such tags also ignore the newline before their content.
+				ignoreRestOfLine = true
+			// Standalone tags use the indentation from their line.
+			case isStandalone:
+				indent = leadingText
+			}
+
+			// Add any literal text encountered since the last tag.
+			if !isStandalone {
+				// If this is the first tag we're processing on the line
+				// and it's not the argument block close tag at the start of the line,
+				// then add an indent point.
+				// The special argument block close tag is necessary
+				// because we want "{{$foo}}\n  foo\n{{/foo}}" to be treated as "foo\n".
+				// If we added an insert point, then we would add an extra indent after the newline
+				// during template execution.
+				if prevEnd == 0 && !(tagStart == 0 && special == '/' && stack[len(stack)-1].start.tt == block && stack[len(stack)-2].start.tt == parent) {
+					curr := stack[len(stack)-1].slice
+					*curr = append(*curr, tag{tt: indentPoint})
+				}
+				appendLiteral(leadingText)
+			}
+
+			switch special {
+			case '#':
+				// Section.
+				newScope(tag{
+					tt: section,
+					s:  key,
+				})
+			case '^':
+				// Inverted section.
+				newScope(tag{
+					tt: invertedSection,
+					s:  key,
+				})
+			case '!':
+				// Comment.
+			case '>':
+				// Partial.
+				curr := stack[len(stack)-1].slice
+				*curr = append(*curr, tag{
+					tt:     partial,
+					s:      key,
+					indent: indent,
+				})
+			case '$':
+				// Block.
+				newScope(tag{
+					tt:     block,
+					s:      key,
+					indent: indent,
+				})
+				// If there's more content on the line,
+				// then add an indent point to act like the beginning of a line.
+				curr := stack[len(stack)-1].slice
+				if !ignoreRestOfLine {
+					*curr = append(*curr, tag{tt: indentPoint})
+				}
+			case '<':
+				// Parent.
+				newScope(tag{
+					tt:     parent,
+					s:      key,
+					indent: indent,
+				})
+				stack[len(stack)-1].standalone = isStandalone
+			case '/':
+				// Closing tag.
+				last := len(stack) - 1
+				if last == 0 {
+					return nil, fmt.Errorf("%d: %s/%s%s without opening", lineno, startDelim, key, endDelim)
+				}
+				if stack[last].start.tt == parent {
+					// We already computed whether the closing tag clears when we opened the tag.
+					ignoreRestOfLine = stack[last].standalone
+				}
+				if want := stack[last].start.s; key != want {
+					return nil, fmt.Errorf("%d: mismatched %s/%s%s (last opened %s on line %d)",
+						lineno, startDelim, key, endDelim, want, stack[last].lineno)
+				}
+				stack[last] = scope{}
+				stack = stack[:last]
+			case '&':
+				// Raw variable.
+				curr := stack[len(stack)-1].slice
+				*curr = append(*curr, tag{
+					tt: rawVariable,
+					s:  key,
+				})
+			default:
+				// Escaped variable.
+				curr := stack[len(stack)-1].slice
+				*curr = append(*curr, tag{
+					tt: variable,
+					s:  key,
+				})
+			}
+
+			// Move to next tag in the line.
+			if ignoreRestOfLine {
+				prevEnd = eol
+				break
+			}
+			prevEnd = tagEnd
+			tagStart = nextIndex(s[:eol], tagEnd, startDelim)
+		}
+
+		// After we've processed all the tags in the line,
+		// add any remaining text as a literal
+		// and move on to the next line.
+		appendLiteral(s[prevEnd:eol])
+		s = s[eol:]
+		lineno++
+	}
+
+	// Return an error if there are open tags.
+	if i := len(stack) - 1; i > 0 {
+		last := stack[i]
+		return nil, fmt.Errorf("%d: unclosed %s", last.lineno, last.start.s)
 	}
 
 	return result, nil
 }
 
-func cutTag(inner string, isDefault bool) (b byte, name string) {
-	if len(inner) > 1 && (strings.IndexByte(`#^!<>$/&`, inner[0]) >= 0 || inner[0] == '{' && isDefault) {
+// cutTag parses the tag that starts at the index tagStart in s.
+// It is assumed that strings.HasPrefix(s[tagStart:], startDelim) reports true.
+func cutTag(s string, tagStart int, startDelim, endDelim string) (b byte, key string, tagEnd int, err error) {
+	// Find end of tag.
+	tagInnerStart := tagStart + len(startDelim)
+	isComment := strings.HasPrefix(s[tagInnerStart:], "!")
+	tagInnerEnd := tagInnerStart
+	tagEnd = -1
+	for ; tagInnerEnd+len(endDelim) <= len(s); tagInnerEnd++ {
+		if s[tagInnerEnd] == '\n' && !isComment {
+			// Newlines only permitted in comments.
+			return 0, "", -1, errors.New("unclosed tag")
+		}
+		if i := tagInnerEnd + len(endDelim); s[tagInnerEnd:i] == endDelim {
+			tagEnd = i
+			break
+		}
+	}
+	if tagEnd < 0 {
+		if isComment {
+			return 0, "", -1, errors.New("unclosed comment")
+		}
+		return 0, "", -1, errors.New("unclosed tag")
+	}
+
+	// Check for triple-bracketed (raw) variable.
+	// {{{foo}}} is treated identically to {{&foo}}.
+	isDefault := startDelim == "{{" && endDelim == "}}"
+	if isDefault && s[tagInnerStart] == '{' && strings.HasPrefix(s[tagEnd:], "}") {
+		tagInnerStart++
+		tagEnd++
+		return '&', strings.TrimSpace(s[tagInnerStart:tagInnerEnd]), tagEnd, nil
+	}
+
+	// Extract first character if it's one of the known specials.
+	inner := s[tagInnerStart:tagInnerEnd]
+	if len(inner) > 1 && strings.IndexByte(`#^!<>$/&`, inner[0]) >= 0 {
 		b = inner[0]
 		inner = inner[1:]
 	}
-	return b, strings.TrimSpace(inner)
+	return b, strings.TrimSpace(inner), tagEnd, nil
 }
 
-func isStandalone(s string, tagStart, tagEnd int) (prevLineEnd, nextLineStart int, insert, indent string, ok bool) {
-	i := strings.LastIndex(s[:tagStart], "\n")
-	var lineStart int
-	if i == -1 {
-		lineStart = 0
-		prevLineEnd = 0
-	} else {
-		lineStart = i + 1
-		prevLineEnd = i
-		if strings.HasSuffix(s[:prevLineEnd], "\r") {
-			prevLineEnd--
-			insert = "\r\n"
-		} else {
-			insert = "\n"
+// elementEnd returns the end of the matching end tag.
+// The search starts at tagEnd,
+// the index in s of the end of the start tag with the given name.
+func elementEnd(name string, s string, tagEnd int, startDelim, endDelim string) (int, error) {
+	level := 1
+	i := tagEnd
+	for level > 0 {
+		tagStart := nextIndex(s, i, startDelim)
+		if tagStart < 0 {
+			return -1, fmt.Errorf("unclosed %s", name)
 		}
+		special, key, tagEnd, err := cutTag(s, tagStart, startDelim, endDelim)
+		if err != nil {
+			return -1, fmt.Errorf("unclosed %s", name)
+		}
+		switch special {
+		case '#', '^', '$', '<':
+			if key == name {
+				level++
+			}
+		case '/':
+			if key == name {
+				level--
+			}
+		}
+		i = tagEnd
 	}
-	nonSpace := func(c rune) bool { return !unicode.IsSpace(c) }
-	i = strings.Index(s[tagEnd:], "\n")
-	var lineEnd int
-	if i == -1 {
-		lineEnd = len(s)
-		nextLineStart = len(s)
-	} else {
-		lineEnd = tagEnd + i
-		nextLineStart = tagEnd + i + 1
-	}
-
-	if strings.ContainsFunc(s[lineStart:tagStart], nonSpace) || strings.ContainsFunc(s[tagEnd:lineEnd], nonSpace) {
-		return 0, 0, "", "", false
-	}
-
-	return prevLineEnd, nextLineStart, insert, s[lineStart:tagStart], true
+	return i, nil
 }
 
+// walkTags returns an iterator that visits all tags in the given slice in pre-order.
 func walkTags(tags []tag) iter.Seq[tag] {
 	var walk func(tags []tag, yield func(tag) bool) bool
 	walk = func(tags []tag, yield func(tag) bool) bool {
@@ -294,27 +427,42 @@ func tagsEqual(t1, t2 tag) bool {
 	return slices.EqualFunc(t1.body, t2.body, tagsEqual)
 }
 
-func indent(s, indent string) string {
-	if indent == "" {
-		return s
+// nextIndex is like [strings.Index],
+// but takes in a starting index.
+// nextIndex will not return a value less than start
+// unless substr is not found within s[start:],
+// in which case nextIndex will return -1.
+func nextIndex(s string, start int, substr string) int {
+	i := strings.Index(s[start:], substr)
+	if i < 0 {
+		return i
 	}
-	sb := new(strings.Builder)
-	sb.Grow(len(s) + len(indent))
-	for {
-		eol := strings.IndexByte(s, '\n')
-		var line string
-		if eol == -1 {
-			line = s
-		} else {
-			eol++
-			line = s[:eol]
-		}
-		sb.WriteString(indent)
-		sb.WriteString(line)
-		if eol == -1 || eol == len(s) {
-			break
-		}
-		s = s[eol:]
+	return start + i
+}
+
+// indexNextLine returns the index of the last byte of the first line of s (exclusive).
+func indexNextLine(s string) int {
+	i := strings.IndexByte(s, '\n')
+	if i < 0 {
+		return len(s)
 	}
-	return sb.String()
+	return i + 1
+}
+
+// lineIndentation returns the longest whitespace-only prefix of line.
+func lineIndentation(line string) string {
+	firstNonSpace := strings.IndexFunc(line, func(c rune) bool {
+		return !unicode.Is(unicode.Zs, c) && c != '\t'
+	})
+	if firstNonSpace < 0 {
+		return line
+	}
+	return line[:firstNonSpace]
+}
+
+// isSpace reports whether all the characters in s are whitespace characters.
+func isSpace(s string) bool {
+	return !strings.ContainsFunc(s, func(c rune) bool {
+		return !unicode.IsSpace(c)
+	})
 }

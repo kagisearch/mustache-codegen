@@ -4,7 +4,6 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"text/template"
@@ -16,31 +15,24 @@ var prelude string
 func compileJS(source string, load func(name string) (string, error)) ([]byte, error) {
 	tags, err := parse(string(source))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return nil, err
 	}
 
 	var partials [][]tag
-	sourceCache := make(map[string]string)
-	partialFuncNames := make(map[partialKey]string)
+	partialFuncNames := make(map[string]string)
 
 	var gatherPartials func(tags []tag) error
 	gatherPartials = func(tags []tag) error {
 		for t := range walkTags(tags) {
 			if t.tt == partial || t.tt == parent {
-				k := partialKey{name: t.s, indent: t.indent}
-				if partialFuncNames[k] != "" {
+				if partialFuncNames[t.s] != "" {
 					continue
 				}
-				source, cached := sourceCache[t.s]
-				if !cached {
-					var err error
-					source, err = load(t.s)
-					if err != nil {
-						return err
-					}
+				source, err := load(t.s)
+				if err != nil {
+					return err
 				}
-				partialTags, err := parse(indent(source, t.indent))
+				partialTags, err := parse(source)
 				if err != nil {
 					return fmt.Errorf("partial %s: %v", t.s, err)
 				}
@@ -52,7 +44,7 @@ func compileJS(source string, load func(name string) (string, error)) ([]byte, e
 					partials = append(partials, partialTags)
 					i = len(partials) - 1
 				}
-				partialFuncNames[k] = fmt.Sprintf("p%d", i)
+				partialFuncNames[t.s] = fmt.Sprintf("p%d", i)
 				if err := gatherPartials(partialTags); err != nil {
 					return err
 				}
@@ -69,9 +61,9 @@ func compileJS(source string, load func(name string) (string, error)) ([]byte, e
 
 	for i, partialTags := range partials {
 		fmt.Fprintf(buf, "function p%d", i)
-		buf.WriteString(`(s,b){let x=''`)
+		buf.WriteString(`(n,s,b){let x=''`)
 		for _, t := range partialTags {
-			if err := compileTagJS(buf, t, partialFuncNames, true); err != nil {
+			if err := compileTagJS(buf, t, partialFuncNames, true, true); err != nil {
 				return nil, err
 			}
 		}
@@ -80,7 +72,7 @@ func compileJS(source string, load func(name string) (string, error)) ([]byte, e
 
 	buf.WriteString(`export default function(data){let s=[data],x=''`)
 	for _, t := range tags {
-		if err := compileTagJS(buf, t, partialFuncNames, false); err != nil {
+		if err := compileTagJS(buf, t, partialFuncNames, false, false); err != nil {
 			return nil, err
 		}
 	}
@@ -88,12 +80,12 @@ func compileJS(source string, load func(name string) (string, error)) ([]byte, e
 	return buf.Bytes(), nil
 }
 
-func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]string, blocks bool) error {
+func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, blocks, indent bool) error {
 	// prelude helpers:
 	// esc(s): escape value
 	// f(x): is falsey
 	// arr(x): is array
-	// ind(tab, s): indent
+	// look(s,k): lookup k in stack s
 
 	// guide to variables:
 	// x: output string
@@ -104,12 +96,17 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 	// e: anonymous block function context
 	// b: blocks record
 	// bb: block
+	// n: indent
 
 	switch t.tt {
 	case literal:
 		buf.WriteString(`;x+='`)
 		template.JSEscape(buf, []byte(t.s))
 		buf.WriteString(`'`)
+	case indentPoint:
+		if indent {
+			buf.WriteString(";x+=n")
+		}
 	case variable:
 		buf.WriteString(`;x+=esc(`)
 		compileNamePathJS(buf, t.s)
@@ -123,7 +120,7 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 		compileNamePathJS(buf, t.s)
 		buf.WriteString(`;if(!f(c)){let g=(e)=>{s.push(e)`)
 		for _, tag := range t.body {
-			if err := compileTagJS(buf, tag, partialFuncNames, blocks); err != nil {
+			if err := compileTagJS(buf, tag, partialFuncNames, blocks, indent); err != nil {
 				return err
 			}
 		}
@@ -133,16 +130,17 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 		compileNamePathJS(buf, t.s)
 		buf.WriteString(`)){`)
 		for _, sub := range t.body {
-			if err := compileTagJS(buf, sub, partialFuncNames, blocks); err != nil {
+			if err := compileTagJS(buf, sub, partialFuncNames, blocks, indent); err != nil {
 				return err
 			}
 		}
 		buf.WriteString(`}`)
 	case partial:
 		buf.WriteString(`;x+=`)
-		k := partialKey{name: t.s, indent: t.indent}
-		buf.WriteString(partialFuncNames[k])
-		buf.WriteString(`(s,{})`)
+		buf.WriteString(partialFuncNames[t.s])
+		buf.WriteString("(")
+		jsIncreaseIndent(buf, indent, t.indent)
+		buf.WriteString(`,s,{})`)
 	case block:
 		if blocks {
 			buf.WriteString(`;{const bb=b`)
@@ -154,10 +152,12 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 				template.JSEscape(buf, []byte(t.s))
 				buf.WriteString(`']`)
 			}
-			buf.WriteString(`;if(bb!==undefined)x+=bb(s);else{`)
+			buf.WriteString(`;if(bb!==undefined)x+=bb(`)
+			jsIncreaseIndent(buf, indent, t.indent)
+			buf.WriteString(`,s);else{`)
 		}
 		for _, sub := range t.body {
-			if err := compileTagJS(buf, sub, partialFuncNames, blocks); err != nil {
+			if err := compileTagJS(buf, sub, partialFuncNames, blocks, indent); err != nil {
 				return err
 			}
 		}
@@ -166,9 +166,10 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 		}
 	case parent:
 		buf.WriteString(`;x+=`)
-		k := partialKey{name: t.s, indent: t.indent}
-		buf.WriteString(partialFuncNames[k])
-		buf.WriteString(`(s,{`)
+		buf.WriteString(partialFuncNames[t.s])
+		buf.WriteString("(")
+		jsIncreaseIndent(buf, indent, t.indent)
+		buf.WriteString(`,s,{`)
 		first := true
 		for _, blockTag := range t.body {
 			if blockTag.tt != block {
@@ -184,9 +185,9 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 				template.JSEscape(buf, []byte(blockTag.s))
 				buf.WriteString(`'`)
 			}
-			buf.WriteString(`:(s)=>{let x=''`)
+			buf.WriteString(`:(n,s)=>{let x=''`)
 			for _, blockSub := range blockTag.body {
-				if err := compileTagJS(buf, blockSub, partialFuncNames, blocks); err != nil {
+				if err := compileTagJS(buf, blockSub, partialFuncNames, blocks, true); err != nil {
 					return err
 				}
 			}
@@ -225,6 +226,29 @@ func compileNamePathJS(w *bytes.Buffer, name string) {
 			template.JSEscape(w, []byte(part))
 			w.WriteString(`']`)
 		}
+	}
+}
+
+func jsIndentArg(indent bool) string {
+	if indent {
+		return "n"
+	} else {
+		return "''"
+	}
+}
+
+func jsIncreaseIndent(w *bytes.Buffer, indentVar bool, indent string) {
+	switch {
+	case indentVar && indent == "":
+		w.WriteString("n")
+	case !indentVar:
+		w.WriteString("'")
+		template.JSEscape(w, []byte(indent))
+		w.WriteString("'")
+	default:
+		w.WriteString("n+'")
+		template.JSEscape(w, []byte(indent))
+		w.WriteString("'")
 	}
 }
 

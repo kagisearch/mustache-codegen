@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	gofmt "go/format"
-	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -15,31 +15,24 @@ const supportImportPath = "github.com/kagisearch/mustache-codegen/go/mustache"
 func compileGo(packageName string, templateName string, source string, load func(name string) (string, error)) ([]byte, error) {
 	tags, err := parse(string(source))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return nil, err
 	}
 
 	var partials [][]tag
-	sourceCache := make(map[string]string)
-	partialFuncNames := make(map[partialKey]string)
+	partialFuncNames := make(map[string]string)
 
 	var gatherPartials func(tags []tag) error
 	gatherPartials = func(tags []tag) error {
 		for t := range walkTags(tags) {
 			if t.tt == partial || t.tt == parent {
-				k := partialKey{name: t.s, indent: t.indent}
-				if partialFuncNames[k] != "" {
+				if partialFuncNames[t.s] != "" {
 					continue
 				}
-				source, cached := sourceCache[t.s]
-				if !cached {
-					var err error
-					source, err = load(t.s)
-					if err != nil {
-						return err
-					}
+				source, err := load(t.s)
+				if err != nil {
+					return err
 				}
-				partialTags, err := parse(indent(source, t.indent))
+				partialTags, err := parse(source)
 				if err != nil {
 					return fmt.Errorf("partial %s: %v", t.s, err)
 				}
@@ -51,7 +44,7 @@ func compileGo(packageName string, templateName string, source string, load func
 					partials = append(partials, partialTags)
 					i = len(partials) - 1
 				}
-				partialFuncNames[k] = fmt.Sprintf("_%s_p%d", templateName, i)
+				partialFuncNames[t.s] = fmt.Sprintf("_%s_p%d", templateName, i)
 				if err := gatherPartials(partialTags); err != nil {
 					return err
 				}
@@ -83,9 +76,9 @@ func compileGo(packageName string, templateName string, source string, load func
 	fmt.Fprintln(buf, ")")
 
 	for i, partialTags := range partials {
-		fmt.Fprintf(buf, "func _%s_p%d(sb *strings.Builder, stack []reflect.Value, blocks map[string]func(*strings.Builder, []reflect.Value)) {\n", templateName, i)
+		fmt.Fprintf(buf, "func _%s_p%d(sb *strings.Builder, indent string, stack []reflect.Value, blocks map[string]func(*strings.Builder, string, []reflect.Value)) {\n", templateName, i)
 		for _, t := range partialTags {
-			if err := compileTagGo(buf, t, partialFuncNames, true); err != nil {
+			if err := compileTagGo(buf, t, partialFuncNames, true, true); err != nil {
 				return nil, err
 			}
 		}
@@ -96,7 +89,7 @@ func compileGo(packageName string, templateName string, source string, load func
 	fmt.Fprintln(buf, "\tstack := []reflect.Value{reflect.ValueOf(data)}")
 	fmt.Fprintln(buf, "\t_ = stack")
 	for _, t := range tags {
-		if err := compileTagGo(buf, t, partialFuncNames, false); err != nil {
+		if err := compileTagGo(buf, t, partialFuncNames, false, false); err != nil {
 			return nil, err
 		}
 	}
@@ -109,10 +102,14 @@ func compileGo(packageName string, templateName string, source string, load func
 	return formatted, nil
 }
 
-func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]string, blocks bool) error {
+func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, blocks, indent bool) error {
 	switch t.tt {
 	case literal:
 		fmt.Fprintf(buf, "\tsb.WriteString(%q)\n", t.s)
+	case indentPoint:
+		if indent {
+			fmt.Fprintln(buf, "\tsb.WriteString(indent)")
+		}
 	case variable:
 		fmt.Fprintf(buf, "\tsb.WriteString(html.EscapeString(m.ToString(m.Lookup(stack, %q))))\n", t.s)
 	case rawVariable:
@@ -121,7 +118,7 @@ func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 		fmt.Fprintf(buf, "\tfor e := range m.ForEach(m.Lookup(stack, %q)) {\n", t.s)
 		fmt.Fprintln(buf, "\t\tstack = append(stack, e)")
 		for _, tag := range t.body {
-			if err := compileTagGo(buf, tag, partialFuncNames, blocks); err != nil {
+			if err := compileTagGo(buf, tag, partialFuncNames, blocks, indent); err != nil {
 				return err
 			}
 		}
@@ -131,22 +128,21 @@ func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 	case invertedSection:
 		fmt.Fprintf(buf, "\tif m.IsFalsyOrEmptyList(m.Lookup(stack, %q)) {\n", t.s)
 		for _, sub := range t.body {
-			if err := compileTagGo(buf, sub, partialFuncNames, blocks); err != nil {
+			if err := compileTagGo(buf, sub, partialFuncNames, blocks, indent); err != nil {
 				return err
 			}
 		}
 		fmt.Fprintln(buf, "\t}")
 	case partial:
-		k := partialKey{name: t.s, indent: t.indent}
-		fmt.Fprintf(buf, "\t%s(sb, stack, nil)\n", partialFuncNames[k])
+		fmt.Fprintf(buf, "\t%s(sb, %s, stack, nil)\n", partialFuncNames[t.s], goIncreaseIndent(indent, t.indent))
 	case block:
 		if blocks {
 			fmt.Fprintf(buf, "\tif b, ok := blocks[%q]; ok {\n", t.s)
-			fmt.Fprintln(buf, "\t\tb(sb, stack)")
+			fmt.Fprintf(buf, "\t\tb(sb, %s, stack)\n", goIncreaseIndent(indent, t.indent))
 			fmt.Fprintln(buf, "\t} else {")
 		}
 		for _, sub := range t.body {
-			if err := compileTagGo(buf, sub, partialFuncNames, blocks); err != nil {
+			if err := compileTagGo(buf, sub, partialFuncNames, blocks, indent); err != nil {
 				return err
 			}
 		}
@@ -154,17 +150,16 @@ func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 			fmt.Fprintln(buf, "\t}")
 		}
 	case parent:
-		k := partialKey{name: t.s, indent: t.indent}
 		fmt.Fprintln(buf, "\t{")
-		fmt.Fprintln(buf, "\t\tpartialBlocks := make(map[string]func(*strings.Builder, []reflect.Value))")
+		fmt.Fprintln(buf, "\t\tpartialBlocks := make(map[string]func(*strings.Builder, string, []reflect.Value))")
 		fmt.Fprintln(buf, "\t\t_ = partialBlocks")
 		for _, blockTag := range t.body {
 			if blockTag.tt != block {
 				continue
 			}
-			fmt.Fprintf(buf, "\t\tpartialBlocks[%q] = func(sb *strings.Builder, stack []reflect.Value) {\n", blockTag.s)
+			fmt.Fprintf(buf, "\t\tpartialBlocks[%q] = func(sb *strings.Builder, indent string, stack []reflect.Value) {\n", blockTag.s)
 			for _, blockSub := range blockTag.body {
-				if err := compileTagGo(buf, blockSub, partialFuncNames, blocks); err != nil {
+				if err := compileTagGo(buf, blockSub, partialFuncNames, blocks, true); err != nil {
 					return err
 				}
 			}
@@ -175,7 +170,7 @@ func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[partialKey]stri
 			fmt.Fprintln(buf, "\t\t\tpartialBlocks[k] = v")
 			fmt.Fprintln(buf, "\t\t}")
 		}
-		fmt.Fprintf(buf, "\t\t%s(sb, stack, partialBlocks)\n", partialFuncNames[k])
+		fmt.Fprintf(buf, "\t\t%s(sb, %s, stack, partialBlocks)\n", partialFuncNames[t.s], goIncreaseIndent(indent, t.indent))
 		fmt.Fprintln(buf, "\t}")
 	default:
 		return fmt.Errorf("unhandled tag %d", t.tt)
@@ -197,4 +192,23 @@ func lowerSnakeToUpperCamel(s string) string {
 		}
 	}
 	return sb.String()
+}
+
+func goIndentArg(indent bool) string {
+	if indent {
+		return "indent"
+	} else {
+		return `""`
+	}
+}
+
+func goIncreaseIndent(indentVar bool, indent string) string {
+	switch {
+	case indentVar && indent == "":
+		return "indent"
+	case !indentVar:
+		return strconv.Quote(indent)
+	default:
+		return "indent+" + strconv.Quote(indent)
+	}
 }
