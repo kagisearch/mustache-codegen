@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Kagi Search
+// SPDX-License-Identifier: MIT
+
 package main
 
 import (
