@@ -25,6 +25,7 @@ func TestCompileGo(t *testing.T) {
 		"Comments",
 		"Inverted",
 		"Partials",
+		"Delimiters",
 		"~Inheritance",
 	}
 	overrides := map[string]string{

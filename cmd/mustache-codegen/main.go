@@ -164,7 +164,7 @@ func parse(s string) ([]tag, error) {
 				lineno += n
 				eol = tagEnd + indexNextLine(s[tagEnd:])
 			}
-			if special != '!' {
+			if special != '!' && special != '=' {
 				// Non-comments must contain a non-whitespace character sequence.
 				if key == "" {
 					return nil, fmt.Errorf("%d: empty tag", lineno)
@@ -286,6 +286,13 @@ func parse(s string) ([]tag, error) {
 				}
 				stack[last] = scope{}
 				stack = stack[:last]
+			case '=':
+				// Set delimiter tag.
+				var err error
+				startDelim, endDelim, err = splitSetDelimiterTag(key)
+				if err != nil {
+					return nil, fmt.Errorf("%d: %v", lineno, err)
+				}
 			case '&':
 				// Raw variable.
 				curr := stack[len(stack)-1].slice
@@ -364,11 +371,38 @@ func cutTag(s string, tagStart int, startDelim, endDelim string) (b byte, key st
 
 	// Extract first character if it's one of the known specials.
 	inner := s[tagInnerStart:tagInnerEnd]
+	if inner, isDelimiter := strings.CutPrefix(inner, "="); isDelimiter {
+		inner, hasFinalEquals := strings.CutSuffix(inner, "=")
+		if !hasFinalEquals {
+			return '=', inner, tagEnd, fmt.Errorf("%s does not end with =%s", s[tagStart:tagEnd], endDelim)
+		}
+		return '=', strings.TrimSpace(inner), tagEnd, nil
+	}
 	if len(inner) > 1 && strings.IndexByte(`#^!<>$/&`, inner[0]) >= 0 {
 		b = inner[0]
 		inner = inner[1:]
 	}
 	return b, strings.TrimSpace(inner), tagEnd, nil
+}
+
+// splitSetDelimiterTag splits the inner content of a set delimiter tag
+// into the start and end delimiters.
+func splitSetDelimiterTag(s string) (startDelim, endDelim string, err error) {
+	i := strings.IndexFunc(s, unicode.IsSpace)
+	if i == 0 {
+		return "", "", errors.New("set delimiter tag empty")
+	}
+	if i < 0 {
+		return "", "", errors.New("set delimiter tag missing an end delimiter")
+	}
+	j := nextIndexFunc(s, i, isNonSpace)
+	if j < 0 {
+		return "", "", errors.New("set delimiter tag missing an end delimiter")
+	}
+	if k := nextIndexFunc(s, j, unicode.IsSpace); k >= 0 {
+		return "", "", errors.New("set delimiter tag has more than two delimiters")
+	}
+	return s[:i], s[j:], nil
 }
 
 // elementEnd returns the end of the matching end tag.
@@ -394,6 +428,12 @@ func elementEnd(name string, s string, tagEnd int, startDelim, endDelim string) 
 		case '/':
 			if key == name {
 				level--
+			}
+		case '=':
+			var err error
+			startDelim, endDelim, err = splitSetDelimiterTag(key)
+			if err != nil {
+				return 0, err
 			}
 		}
 		i = tagEnd
@@ -440,6 +480,19 @@ func nextIndex(s string, start int, substr string) int {
 	return start + i
 }
 
+// nextIndexFunc is like [strings.IndexFunc],
+// but takes in a starting index.
+// nextIndexFunc will not return a value less than start
+// unless substr is not found within s[start:],
+// in which case nextIndexFunc will return -1.
+func nextIndexFunc(s string, start int, f func(rune) bool) int {
+	i := strings.IndexFunc(s[start:], f)
+	if i < 0 {
+		return i
+	}
+	return start + i
+}
+
 // indexNextLine returns the index of the last byte of the first line of s (exclusive).
 func indexNextLine(s string) int {
 	i := strings.IndexByte(s, '\n')
@@ -462,7 +515,9 @@ func lineIndentation(line string) string {
 
 // isSpace reports whether all the characters in s are whitespace characters.
 func isSpace(s string) bool {
-	return !strings.ContainsFunc(s, func(c rune) bool {
-		return !unicode.IsSpace(c)
-	})
+	return !strings.ContainsFunc(s, isNonSpace)
+}
+
+func isNonSpace(c rune) bool {
+	return !unicode.IsSpace(c)
 }

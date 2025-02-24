@@ -22,6 +22,7 @@ func TestCompileJS(t *testing.T) {
 		"Comments",
 		"Inverted",
 		"Partials",
+		"Delimiters",
 		"~Inheritance",
 	}
 
