@@ -11,6 +11,8 @@ import (
 
 // Lookup finds the last value for the given key (possibly containing dots).
 // in the contextStack.
+// A key will be looked up as either a map key or a struct field
+// after dereferencing all pointers and interfaces.
 func Lookup(contextStack []reflect.Value, path string) reflect.Value {
 	if path == "." {
 		return contextStack[len(contextStack)-1]

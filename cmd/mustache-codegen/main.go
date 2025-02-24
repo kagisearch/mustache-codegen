@@ -37,13 +37,39 @@ const (
 	indentPoint
 )
 
+const programName = "mustache-codegen"
+
 func main() {
-	goOutput := flag.Bool("go", false, "compile to Go")
-	goPkgName := flag.String("package", "main", "Go package `name`")
+	generatorName := flag.String("lang", "", "`language` to generate code for (js or go)")
+	goPkgName := flag.String("go-package", "main", "Go package `name`")
+	outputFile := flag.String("o", "", "output `file`")
 	flag.Parse()
 
 	var templateName string
 	templateDir := "."
+	load := func(name string) (string, error) {
+		data, err := os.ReadFile(filepath.Join(templateDir, name+".mustache"))
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+	generator := map[string]func(string) ([]byte, error){
+		"go": func(source string) ([]byte, error) {
+			return compileGo(*goPkgName, templateName, source, load)
+		},
+		"js": func(source string) ([]byte, error) {
+			return compileJS(source, load)
+		},
+	}[*generatorName]
+	if generator == nil {
+		fmt.Fprintf(os.Stderr, "%s: unknown -lang=%s\n", programName, *generatorName)
+		os.Exit(1)
+	}
+
 	var input []byte
 	var err error
 	if fname := flag.Arg(0); fname != "" {
@@ -55,31 +81,24 @@ func main() {
 		templateName = "stdin"
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "%s: %v\n", programName, err)
 		os.Exit(1)
 	}
 
-	var output []byte
-	load := func(name string) (string, error) {
-		data, err := os.ReadFile(filepath.Join(templateDir, name+".mustache"))
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		return string(data), nil
-	}
-	if *goOutput {
-		output, err = compileGo(*goPkgName, templateName, string(input), load)
-	} else {
-		output, err = compileJS(string(input), load)
-	}
+	output, err := generator(string(input))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "%s: %v\n", programName, err)
 		os.Exit(1)
 	}
-	os.Stdout.Write(output)
+	if *outputFile == "" {
+		_, err = os.Stdout.Write(output)
+	} else {
+		err = os.WriteFile(*outputFile, output, 0o666)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", programName, err)
+		os.Exit(1)
+	}
 }
 
 const (
