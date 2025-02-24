@@ -33,7 +33,7 @@ For example, if we have a template `foo_bar.mustache` with the following content
 
 ```mustache
 {{! foo_bar.mustache }}
-Hello, {{foo}}!
+Hello, {{subject}}!
 ```
 
 Then we run:
@@ -68,7 +68,7 @@ import (
 
 func main() {
 	buf := new(bytes.Buffer)
-	FooBar(buf, map[string]string{"foo": "World"})
+	FooBar(buf, map[string]string{"subject": "World"})
 	buf.WriteTo(os.Stdout)
 }
 ```
@@ -86,7 +86,7 @@ For example, if we have a template `foo.mustache` with the following content:
 
 ```mustache
 {{! foo.mustache }}
-Hello, {{foo}}!
+Hello, {{subject}}!
 ```
 
 Then we run:
@@ -102,7 +102,7 @@ We can use the template like this:
 
 import foo from "./foo.mjs"
 
-console.log(foo({foo: "World"}))
+console.log(foo({subject: "World"}))
 ```
 
 [JavaScript module syntax]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules
