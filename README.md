@@ -18,7 +18,7 @@ See [mustache(5)][] for a syntax manual.
 [Install Go][], and then run:
 
 ```shell
-go install github.com/kagisearch/mustache-codegen/cmd/mustache-codegen
+go install github.com/kagisearch/mustache-codegen/cmd/mustache-codegen@latest
 ```
 
 This will install the `mustache-codegen` in `$GOPATH/bin`.
