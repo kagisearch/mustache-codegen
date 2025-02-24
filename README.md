@@ -29,28 +29,34 @@ This will install the `mustache-codegen` in `$GOPATH/bin`.
 ## Using with Go
 
 Use `mustache-codegen -lang=go` to generate Go code from a Mustache template.
-For a template named "foo_bar.mustache",
-mustache-codegen will create a function:
-
-```go
-func FooBar(buf *bytes.Buffer, data any)
-```
-
-The data is accessed via reflection.
-See the [support package][Go support package] for details on how Mustache tags
-map to Go data structures.
-
-Here's a "Hello World" example:
-
-`foo.mustache`
+For example, if we have a template `foo_bar.mustache` with the following content:
 
 ```mustache
+{{! foo_bar.mustache }}
 Hello, {{foo}}!
 ```
 
-Compile the template with `mustache-codegen -lang=go -o foo.go foo.mustache`, then you can use it like:
+Then we run:
 
-`main.go`
+```shell
+mustache-codegen -lang=go -o foo_bar.go foo_bar.mustache
+```
+
+mustache-codegen will create a function in foo_bar.go with the following signature:
+
+```go
+package main
+
+func FooBar(buf *bytes.Buffer, data any)
+```
+
+The function's name is based on the template file's name,
+and generated package name can be changed with the `-go-package` option.
+
+The template accesses the data via reflection.
+See the [support package][Go support package] for details on how Mustache tags
+map to Go data structures.
+We can use the template function by creating another file `main.go` like this:
 
 ```go
 package main
@@ -67,8 +73,6 @@ func main() {
 }
 ```
 
-The generated package name can be changed with the `-go-package` option.
-
 [Go support package]: https://pkg.go.dev/github.com/kagisearch/mustache-codegen/go/mustache
 
 ## Using with JavaScript
@@ -78,25 +82,28 @@ The generated code will use [JavaScript module syntax][]
 and export a default function that takes the data as its sole argument
 and returns the rendered template as a string.
 
-Here's a "Hello World" example with Node.js:
-
-`foo.mustache`
+For example, if we have a template `foo.mustache` with the following content:
 
 ```mustache
+{{! foo.mustache }}
 Hello, {{foo}}!
 ```
 
-Compile the template with `mustache-codegen -lang=js -o foo.mjs foo.mustache`, and then use it like:
+Then we run:
 
-`main.js`
+```shell
+mustache-codegen -lang=js -o foo.mjs foo.mustache
+```
 
-```js
+We can use the template like this:
+
+```javascript
+// main.mjs
+
 import foo from "./foo.mjs"
 
 console.log(foo({foo: "World"}))
 ```
-
-And run it with `node --input-type=module main.js`
 
 [JavaScript module syntax]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules
 
