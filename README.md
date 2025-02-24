@@ -50,8 +50,8 @@ package main
 func FooBar(buf *bytes.Buffer, data any)
 ```
 
-The function's name is based on the template file's name,
-and generated package name can be changed with the `-go-package` option.
+The function's name is based on the template file's name.
+The generated package name can be changed with the `-go-package` option.
 
 The template accesses the data via reflection.
 See the [support package][Go support package] for details on how Mustache tags
