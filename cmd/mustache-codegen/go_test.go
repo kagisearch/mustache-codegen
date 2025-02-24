@@ -53,13 +53,13 @@ func TestCompileGo(t *testing.T) {
 						t.Fatal(err)
 					}
 					const runner = "package main\n" +
-						"import (\"encoding/json\"; \"os\"; \"strings\")\n" +
+						"import (\"bytes\"; \"encoding/json\"; \"os\")\n" +
 						"func main() {\n" +
 						"var data any\n" +
 						"if err := json.NewDecoder(os.Stdin).Decode(&data); err != nil { panic(err) }\n" +
-						"sb := new(strings.Builder)\n" +
-						templateName + "(sb, data)\n" +
-						"os.Stdout.WriteString(sb.String())\n" +
+						"buf := new(bytes.Buffer)\n" +
+						templateName + "(buf, data)\n" +
+						"os.Stdout.Write(buf.Bytes())\n" +
 						"}\n"
 					if err := os.WriteFile(filepath.Join(tempDir, "main.go"), []byte(runner), 0o666); err != nil {
 						t.Fatal(err)
