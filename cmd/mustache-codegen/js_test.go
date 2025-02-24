@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,37 +15,14 @@ func TestCompileJS(t *testing.T) {
 		t.Skip("Cannot find node:", err)
 	}
 
-	suiteNames := []string{
-		"Interpolation",
-		"Sections",
-		"Comments",
-		"Inverted",
-		"Partials",
-		"Delimiters",
-		"~Inheritance",
-	}
-
 	for _, suiteName := range suiteNames {
 		t.Run(strings.TrimPrefix(suiteName, "~"), func(t *testing.T) {
-			jsonData, err := os.ReadFile(filepath.Join("testdata", strings.ToLower(suiteName)+".json"))
+			suite, err := loadTestSuite(suiteName)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			var suite struct {
-				Tests []struct {
-					Name     string
-					Data     json.RawMessage
-					Template string
-					Partials map[string]string
-					Expected string
-				}
-			}
-			if err := json.Unmarshal(jsonData, &suite); err != nil {
-				t.Fatal(err)
-			}
-
-			for _, test := range suite.Tests {
+			for _, test := range suite {
 				t.Run(test.Name, func(t *testing.T) {
 					js, err := compileJS(test.Template, func(name string) (string, error) {
 						return test.Partials[name], nil
@@ -77,4 +53,33 @@ func TestCompileJS(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzCompileJSDeterminism verifies that JavaScript code generation
+// yields the same code each time it is called with the same template.
+func FuzzCompileJSDeterminism(f *testing.F) {
+	for _, suiteName := range suiteNames {
+		suite, err := loadTestSuite(suiteName)
+		if err != nil {
+			f.Error(err)
+		}
+		for _, test := range suite {
+			f.Add(test.Template)
+		}
+	}
+
+	f.Fuzz(func(t *testing.T, s string) {
+		load := func(name string) (string, error) { return "", nil }
+		got1, err := compileJS(s, load)
+		if err != nil {
+			t.Skip("Invalid template:", err)
+		}
+		got2, err := compileJS(s, load)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got1, got2) {
+			t.Errorf("not deterministic!\n// first:\n%s\n\n// second:\n%s", got1, got2)
+		}
+	})
 }
