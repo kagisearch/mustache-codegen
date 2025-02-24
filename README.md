@@ -42,19 +42,29 @@ map to Go data structures.
 
 Here's a "Hello World" example:
 
-```shell
-echo 'Hello, {{foo}}!' > foo.mustache &&
-mustache-codegen -lang=go -o foo.go foo.mustache &&
-{
-  echo 'package main'
-  echo 'import ( "bytes"; "os"; )'
-  echo 'func main() {'
-  echo 'buf := new(bytes.Buffer)'
-  echo 'Foo(buf, map[string]string{"foo": "World"})'
-  echo 'buf.WriteTo(os.Stdout)'
-  echo '}'
-} > foo_main.go &&
-go run .
+`foo.mustache`
+
+```mustache
+Hello, {{foo}}!
+```
+
+Compile the template with `mustache-codegen -lang=go -o foo.go foo.mustache`, then you can use it like:
+
+`main.go`
+
+```go
+package main
+
+import (
+	"bytes"
+	"os"
+)
+
+func main() {
+	buf := new(bytes.Buffer)
+	Foo(buf, map[string]string{"foo": "World"})
+	buf.WriteTo(os.Stdout)
+}
 ```
 
 The generated package name can be changed with the `-go-package` option.
@@ -70,11 +80,23 @@ and returns the rendered template as a string.
 
 Here's a "Hello World" example with Node.js:
 
-```shell
-echo 'Hello, {{foo}}!' > foo.mustache &&
-mustache-codegen -lang=js -o foo.mjs foo.mustache &&
-node --input-type=module -e 'import foo from "./foo.mjs"; console.log(foo({foo: "World"}))'
+`foo.mustache`
+
+```mustache
+Hello, {{foo}}!
 ```
+
+Compile the template with `mustache-codegen -lang=js -o foo.mjs foo.mustache`, and then use it like:
+
+`main.js`
+
+```js
+import foo from "./foo.mjs"
+
+console.log(foo({foo: "World"}))
+```
+
+And run it with `node --input-type=module main.js`
 
 [JavaScript module syntax]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules
 
