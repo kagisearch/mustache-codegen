@@ -43,10 +43,18 @@ const (
 const programName = "mustache-codegen"
 
 func main() {
-	generatorName := flag.String("lang", "", "`language` to generate code for (js or go)")
-	goPkgName := flag.String("go-package", "main", "Go package `name`")
-	outputFile := flag.String("o", "", "output `file`")
-	flag.Parse()
+	fset := flag.FlagSet{Usage: func() {}}
+	generatorName := fset.String("lang", "", "`language` to generate code for (js or go)")
+	goPkgName := fset.String("go-package", "main", "Go package `name`")
+	outputFile := fset.String("o", "", "output `file`")
+	if err := fset.Parse(os.Args[1:]); err != nil || fset.NArg() > 1 || *generatorName == "" {
+		fmt.Fprintf(fset.Output(), "usage: %s -lang=LANG [options] TEMPLATE\n\n", programName)
+		fset.PrintDefaults()
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		os.Exit(64) // EX_USAGE
+	}
 
 	var templateName string
 	templateDir := "."
@@ -75,7 +83,7 @@ func main() {
 
 	var input []byte
 	var err error
-	if fname := flag.Arg(0); fname != "" {
+	if fname := fset.Arg(0); fname != "" {
 		templateName = strings.TrimSuffix(filepath.Base(fname), ".mustache")
 		templateDir = filepath.Dir(fname)
 		input, err = os.ReadFile(fname)
