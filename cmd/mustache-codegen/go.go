@@ -78,31 +78,42 @@ func compileGo(packageName string, templateName string, source string, load func
 	fmt.Fprintln(buf, "\t_ = m.Lookup")
 	fmt.Fprintln(buf, ")")
 
+	fmt.Fprintf(buf, "\nfunc %s(buf *bytes.Buffer, data any) {\n", lowerSnakeToUpperCamel(templateName))
+	fmt.Fprintln(buf, "\tstack := []reflect.Value{reflect.ValueOf(data)}")
+	fmt.Fprintln(buf, "\t_ = stack")
+	if err := compileTagListGo(buf, tags, partialFuncNames, false, false); err != nil {
+		return nil, err
+	}
+	fmt.Fprintln(buf, "}")
+
 	for i, partialTags := range partials {
-		fmt.Fprintf(buf, "func _%s_p%d(buf *bytes.Buffer, indent string, stack []reflect.Value, blocks map[string]func(*bytes.Buffer, string, []reflect.Value)) {\n", templateName, i)
-		for _, t := range partialTags {
-			if err := compileTagGo(buf, t, partialFuncNames, true, true); err != nil {
-				return nil, err
-			}
+		fmt.Fprintf(buf, "\nfunc _%s_p%d(buf *bytes.Buffer, indent string, stack []reflect.Value, blocks map[string]func(*bytes.Buffer, string, []reflect.Value)) {\n", templateName, i)
+		if err := compileTagListGo(buf, partialTags, partialFuncNames, true, true); err != nil {
+			return nil, err
 		}
 		fmt.Fprintln(buf, "}")
 	}
-
-	fmt.Fprintf(buf, "func %s(buf *bytes.Buffer, data any) {\n", lowerSnakeToUpperCamel(templateName))
-	fmt.Fprintln(buf, "\tstack := []reflect.Value{reflect.ValueOf(data)}")
-	fmt.Fprintln(buf, "\t_ = stack")
-	for _, t := range tags {
-		if err := compileTagGo(buf, t, partialFuncNames, false, false); err != nil {
-			return nil, err
-		}
-	}
-	fmt.Fprintln(buf, "}")
 
 	formatted, err := gofmt.Source(buf.Bytes())
 	if err != nil {
 		return nil, err
 	}
 	return formatted, nil
+}
+
+func compileTagListGo(buf *bytes.Buffer, tags []tag, partialFuncNames map[string]string, blocks, indent bool) error {
+	for i := 0; i < len(tags); i++ {
+		t := tags[i]
+		if !indent && t.tt == literal {
+			var n int
+			t, n = condenseLiteralsWithoutIndentation(tags[i:])
+			i += n - 1
+		}
+		if err := compileTagGo(buf, t, partialFuncNames, blocks, indent); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, blocks, indent bool) error {
@@ -120,20 +131,16 @@ func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, 
 	case section:
 		fmt.Fprintf(buf, "\tfor e := range m.ForEach(m.Lookup(stack, %q)) {\n", t.s)
 		fmt.Fprintln(buf, "\t\tstack = append(stack, e)")
-		for _, tag := range t.body {
-			if err := compileTagGo(buf, tag, partialFuncNames, blocks, indent); err != nil {
-				return err
-			}
+		if err := compileTagListGo(buf, t.body, partialFuncNames, blocks, indent); err != nil {
+			return err
 		}
 		fmt.Fprintln(buf, "\t\tclear(stack[len(stack)-1:])")
 		fmt.Fprintln(buf, "\t\tstack = stack[:len(stack)-1]")
 		fmt.Fprintln(buf, "\t}")
 	case invertedSection:
 		fmt.Fprintf(buf, "\tif m.IsFalsyOrEmptyList(m.Lookup(stack, %q)) {\n", t.s)
-		for _, sub := range t.body {
-			if err := compileTagGo(buf, sub, partialFuncNames, blocks, indent); err != nil {
-				return err
-			}
+		if err := compileTagListGo(buf, t.body, partialFuncNames, blocks, indent); err != nil {
+			return err
 		}
 		fmt.Fprintln(buf, "\t}")
 	case partial:
@@ -144,10 +151,8 @@ func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, 
 			fmt.Fprintf(buf, "\t\tb(buf, %s, stack)\n", goIncreaseIndent(indent, t.indent))
 			fmt.Fprintln(buf, "\t} else {")
 		}
-		for _, sub := range t.body {
-			if err := compileTagGo(buf, sub, partialFuncNames, blocks, indent); err != nil {
-				return err
-			}
+		if err := compileTagListGo(buf, t.body, partialFuncNames, blocks, indent); err != nil {
+			return err
 		}
 		if blocks {
 			fmt.Fprintln(buf, "\t}")
@@ -161,10 +166,8 @@ func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, 
 				continue
 			}
 			fmt.Fprintf(buf, "\t\tpartialBlocks[%q] = func(buf *bytes.Buffer, indent string, stack []reflect.Value) {\n", blockTag.s)
-			for _, blockSub := range blockTag.body {
-				if err := compileTagGo(buf, blockSub, partialFuncNames, blocks, true); err != nil {
-					return err
-				}
+			if err := compileTagListGo(buf, blockTag.body, partialFuncNames, blocks, true); err != nil {
+				return err
 			}
 			fmt.Fprintln(buf, "\t\t}")
 		}

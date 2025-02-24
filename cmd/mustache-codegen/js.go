@@ -66,22 +66,33 @@ func compileJS(source string, load func(name string) (string, error)) ([]byte, e
 	for i, partialTags := range partials {
 		fmt.Fprintf(buf, "function p%d", i)
 		buf.WriteString(`(n,s,b){let x=''`)
-		for _, t := range partialTags {
-			if err := compileTagJS(buf, t, partialFuncNames, true, true); err != nil {
-				return nil, err
-			}
+		if err := compileTagListJS(buf, partialTags, partialFuncNames, true, true); err != nil {
+			return nil, err
 		}
 		buf.WriteString(`;return x}` + "\n")
 	}
 
 	buf.WriteString(`export default function(data){let s=[data],x=''`)
-	for _, t := range tags {
-		if err := compileTagJS(buf, t, partialFuncNames, false, false); err != nil {
-			return nil, err
-		}
+	if err := compileTagListJS(buf, tags, partialFuncNames, false, false); err != nil {
+		return nil, err
 	}
 	buf.WriteString(`;return x}`)
 	return buf.Bytes(), nil
+}
+
+func compileTagListJS(buf *bytes.Buffer, tags []tag, partialFuncNames map[string]string, blocks, indent bool) error {
+	for i := 0; i < len(tags); i++ {
+		t := tags[i]
+		if !indent && t.tt == literal {
+			var n int
+			t, n = condenseLiteralsWithoutIndentation(tags[i:])
+			i += n - 1
+		}
+		if err := compileTagJS(buf, t, partialFuncNames, blocks, indent); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, blocks, indent bool) error {
@@ -123,20 +134,16 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, 
 		buf.WriteString(`;{let c=`)
 		compileNamePathJS(buf, t.s)
 		buf.WriteString(`;if(!f(c)){let g=(e)=>{s.push(e)`)
-		for _, tag := range t.body {
-			if err := compileTagJS(buf, tag, partialFuncNames, blocks, indent); err != nil {
-				return err
-			}
+		if err := compileTagListJS(buf, t.body, partialFuncNames, blocks, indent); err != nil {
+			return err
 		}
 		buf.WriteString(`;s.pop(e)};arr(c)?c.forEach(g):g(c)}}`)
 	case invertedSection:
 		buf.WriteString(`;if(f(`)
 		compileNamePathJS(buf, t.s)
 		buf.WriteString(`)){`)
-		for _, sub := range t.body {
-			if err := compileTagJS(buf, sub, partialFuncNames, blocks, indent); err != nil {
-				return err
-			}
+		if err := compileTagListJS(buf, t.body, partialFuncNames, blocks, indent); err != nil {
+			return err
 		}
 		buf.WriteString(`}`)
 	case partial:
@@ -160,10 +167,8 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, 
 			jsIncreaseIndent(buf, indent, t.indent)
 			buf.WriteString(`,s);else{`)
 		}
-		for _, sub := range t.body {
-			if err := compileTagJS(buf, sub, partialFuncNames, blocks, indent); err != nil {
-				return err
-			}
+		if err := compileTagListJS(buf, t.body, partialFuncNames, blocks, indent); err != nil {
+			return err
 		}
 		if blocks {
 			buf.WriteString(`}}`)
@@ -190,10 +195,8 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, 
 				buf.WriteString(`'`)
 			}
 			buf.WriteString(`:(n,s)=>{let x=''`)
-			for _, blockSub := range blockTag.body {
-				if err := compileTagJS(buf, blockSub, partialFuncNames, blocks, true); err != nil {
-					return err
-				}
+			if err := compileTagListJS(buf, blockTag.body, partialFuncNames, blocks, true); err != nil {
+				return err
 			}
 			buf.WriteString(`;return x}`)
 			first = false

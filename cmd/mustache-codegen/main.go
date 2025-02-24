@@ -490,6 +490,30 @@ func walkTags(tags []tag) iter.Seq[tag] {
 	}
 }
 
+// condenseLiteralsWithoutIndentation joins the strings of the leading [literal] tags in the slice
+// into a single literal tag and returns how many were used.
+// Any [indentPoint] tags are ignored.
+func condenseLiteralsWithoutIndentation(tags []tag) (_ tag, n int) {
+	sb := new(strings.Builder)
+	for i, t := range tags {
+		switch t.tt {
+		case literal:
+			sb.WriteString(t.s)
+		case indentPoint:
+			// Skip.
+		default:
+			return tag{
+				tt: literal,
+				s:  sb.String(),
+			}, i
+		}
+	}
+	return tag{
+		tt: literal,
+		s:  sb.String(),
+	}, len(tags)
+}
+
 func tagsEqual(t1, t2 tag) bool {
 	if t1.tt != t2.tt || t1.s != t2.s || t1.indent != t2.indent {
 		return false
