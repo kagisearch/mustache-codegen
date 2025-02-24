@@ -11,12 +11,12 @@ import (
 )
 
 func TestCompileGo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping for -short")
+	}
 	goPath, err := exec.LookPath("go")
 	if err != nil {
 		t.Skip("Cannot find go(?!):", err)
-	}
-	if os.Getenv("CI") != "" {
-		t.Skip("Slow test; skipping for CI")
 	}
 
 	suiteNames := []string{
