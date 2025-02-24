@@ -68,7 +68,7 @@ import (
 
 func main() {
 	buf := new(bytes.Buffer)
-	Foo(buf, map[string]string{"foo": "World"})
+	FooBar(buf, map[string]string{"foo": "World"})
 	buf.WriteTo(os.Stdout)
 }
 ```
