@@ -17,10 +17,11 @@ import (
 )
 
 type tag struct {
-	tt     tagType
-	s      string
-	indent string
-	body   []tag
+	tt             tagType
+	s              string
+	indent         string
+	indentArgument bool // whether to indent an argument block that replaces this parameter block
+	body           []tag
 }
 
 type tagType int
@@ -210,7 +211,8 @@ func parse(s string) ([]tag, error) {
 			// "Standalone pair" tags are those where the whitespace after their closing tag
 			// is considered instead of the whitespace after the tag itself.
 			leadingText := s[prevEnd:tagStart]
-			trailingText := s[tagEnd:eol]
+			restOfLine := s[tagEnd:eol]
+			trailingText := restOfLine
 			isParameter := special == '$' && stack[len(stack)-1].start.tt != parent
 			isArgument := special == '$' && stack[len(stack)-1].start.tt == parent
 			isStandalonePairTag := special == '<' || isParameter
@@ -231,7 +233,7 @@ func parse(s string) ([]tag, error) {
 			switch {
 			// Argument tags and standalone parameter tags that clear at the end
 			// use the following line's indentation.
-			case (isArgument || isParameter && isStandalone) && isSpace(s[tagEnd:eol]):
+			case (isArgument || isParameter && isStandalone) && isSpace(restOfLine):
 				indent = lineIndentation(dedent(s[eol:]))
 				// Such tags also ignore the newline before their content.
 				ignoreRestOfLine = true
@@ -282,14 +284,15 @@ func parse(s string) ([]tag, error) {
 			case '$':
 				// Block.
 				newScope(tag{
-					tt:     block,
-					s:      key,
-					indent: indent,
+					tt:             block,
+					s:              key,
+					indent:         indent,
+					indentArgument: isStandalone && isParameter && isSpace(restOfLine),
 				})
 				// If there's more content on the line,
 				// then add an indent point to act like the beginning of a line.
-				curr := stack[len(stack)-1].slice
-				if !ignoreRestOfLine {
+				if isArgument && !ignoreRestOfLine {
+					curr := stack[len(stack)-1].slice
 					*curr = append(*curr, tag{tt: indentPoint})
 				}
 			case '<':

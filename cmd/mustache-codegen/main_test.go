@@ -4,7 +4,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +21,7 @@ var suiteNames = []string{
 	"Partials",
 	"Delimiters",
 	"~Inheritance",
+	"Extra",
 }
 
 type testCase struct {
@@ -29,7 +32,50 @@ type testCase struct {
 	Expected string
 }
 
+var extraSuite = []*testCase{
+	{
+		Name:     "ParentIndentationWithoutStandaloneParameter",
+		Data:     json.RawMessage(`{}`),
+		Template: " {{<a}}\n  {{$id}}123{{/id}}\n {{/a}}\n",
+		Partials: map[string]string{
+			"a": "<div\n id=\"{{$id}}{{/id}}\"\n>hi</div>\n",
+		},
+		Expected: " <div\n  id=\"123\"\n >hi</div>\n",
+	},
+	{
+		Name:     "ParentIndentationWithMultilineArgumentWithoutStandaloneParameter",
+		Data:     json.RawMessage(`{}`),
+		Template: " {{<a}}\n  {{$id}}\n  123\n  456\n{{/id}}\n {{/a}}\n",
+		Partials: map[string]string{
+			"a": "<div\n id=\"{{$id}}{{/id}}\"\n>hi</div>\n",
+		},
+		Expected: " <div\n  id=\"123\n456\n\"\n >hi</div>\n",
+	},
+	{
+		Name:     "MultilineArgumentWithStandaloneParameter",
+		Data:     json.RawMessage(`{}`),
+		Template: " {{<a}}\n  {{$b}}\n   123\n   456\n  {{/b}}\n {{/a}}\n",
+		Partials: map[string]string{
+			"a": "<div>\n {{$b}}{{/b}}\n</div>\n",
+		},
+		Expected: " <div>\n 123\n 456\n\n </div>\n",
+	},
+}
+
 func loadTestSuite(suiteName string) ([]*testCase, error) {
+	if suiteName == "Extra" {
+		// Defensive copy.
+		suite := make([]*testCase, 0, len(extraSuite))
+		for _, test := range extraSuite {
+			testCopy := new(testCase)
+			*testCopy = *test
+			testCopy.Partials = maps.Clone(test.Partials)
+			testCopy.Data = bytes.Clone(testCopy.Data)
+			suite = append(suite, testCopy)
+		}
+		return suite, nil
+	}
+
 	jsonData, err := os.ReadFile(filepath.Join("testdata", strings.ToLower(suiteName)+".json"))
 	if err != nil {
 		return nil, err

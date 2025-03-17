@@ -148,7 +148,7 @@ func compileTagGo(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, 
 	case block:
 		if blocks {
 			fmt.Fprintf(buf, "\tif b, ok := blocks[%q]; ok {\n", t.s)
-			fmt.Fprintf(buf, "\t\tb(buf, %s, stack)\n", goIncreaseIndent(indent, t.indent))
+			fmt.Fprintf(buf, "\t\tb(buf, %s, stack)\n", goIncreaseIndent(t.indentArgument && indent, t.indent))
 			fmt.Fprintln(buf, "\t} else {")
 		}
 		if err := compileTagListGo(buf, t.body, partialFuncNames, blocks, indent); err != nil {

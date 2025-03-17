@@ -164,7 +164,7 @@ func compileTagJS(buf *bytes.Buffer, t tag, partialFuncNames map[string]string, 
 				buf.WriteString(`']`)
 			}
 			buf.WriteString(`;if(bb!==undefined)x+=bb(`)
-			jsIncreaseIndent(buf, indent, t.indent)
+			jsIncreaseIndent(buf, t.indentArgument && indent, t.indent)
 			buf.WriteString(`,s);else{`)
 		}
 		if err := compileTagListJS(buf, t.body, partialFuncNames, blocks, indent); err != nil {
