@@ -99,7 +99,7 @@ func main() {
 
 	output, err := generator(string(input))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s: %v\n", programName, err)
+		fmt.Fprintf(os.Stderr, "%s: %s %v\n", programName, templateName, err)
 		os.Exit(1)
 	}
 	if *outputFile == "" {
